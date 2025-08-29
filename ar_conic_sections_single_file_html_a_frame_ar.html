@@ -1,0 +1,231 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no" />
+  <title>AR Kerucut & Irisan (Lingkaran, Parabola, Elips, Hiperbola)</title>
+  <!-- A-Frame & AR.js CDN -->
+  <script src="https://aframe.io/releases/1.5.0/aframe.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/gh/AR-js-org/AR.js@3.4.5/aframe/build/aframe-ar-nft.js"></script>
+  <style>
+    body, html { margin:0; padding:0; overflow:hidden; font-family: system-ui, Arial; }
+    .ui {
+      position: fixed; left: 0; right: 0; bottom: 0; padding: 10px; 
+      display: grid; gap: 8px; background: rgba(0,0,0,.35); color: #fff;
+      grid-template-columns: repeat(4, 1fr);
+      backdrop-filter: blur(6px);
+      z-index: 5;
+    }
+    .ui button, .ui input[type="range"] {
+      border: none; padding: 10px; border-radius: 12px; font-weight: 600;
+      background: rgba(255,255,255,.9);
+    }
+    .ui button.active { outline: 3px solid #4ade80; }
+    .ui .row { grid-column: 1 / -1; display: grid; grid-template-columns: 1fr; gap: 6px; }
+    .toast {
+      position: fixed; top: 10px; left: 50%; transform: translateX(-50%);
+      background: rgba(0,0,0,.6); color: #fff; padding: 8px 12px; border-radius: 10px; z-index: 6;
+      font-size: 14px;
+    }
+    .help { position: fixed; top: 10px; right: 10px; background: rgba(0,0,0,.45); color:#fff; padding:8px 10px; border-radius: 10px; z-index:6; font-size:12px; max-width: 60ch; }
+    a { color: #bbf7d0; }
+  </style>
+</head>
+<body>
+  <div class="help">
+    Arahkan kamera HP ke <strong>marker HIRO</strong> (cetak dari internet).<br/>
+    Gunakan tombol di bawah untuk memilih jenis irisan. Geser slider untuk mengubah kemiringan bidang.
+  </div>
+  <div id="toast" class="toast" style="display:none"></div>
+
+  <!-- UI Controls -->
+  <div class="ui">
+    <button id="btnCircle" title="Lingkaran">Lingkaran</button>
+    <button id="btnEllipse" title="Elips">Elips</button>
+    <button id="btnParabola" title="Parabola">Parabola</button>
+    <button id="btnHyperbola" title="Hiperbola">Hiperbola</button>
+    <div class="row">
+      <label style="color:#fff; font-size:12px">Kemiringan bidang (°)
+        <input id="tilt" type="range" min="0" max="80" step="1" value="30" />
+      </label>
+    </div>
+  </div>
+
+  <!-- AR Scene (marker-based) -->
+  <a-scene embedded vr-mode-ui="enabled:false" renderer="colorManagement:true" 
+           arjs="sourceType: webcam; debugUIEnabled: false;">
+
+    <!-- Marker: gunakan preset hiro -->
+    <a-marker type="pattern" preset="hiro" id="marker">
+      <!-- Lighting for nicer look -->
+      <a-entity light="type:ambient; intensity:0.7"></a-entity>
+      <a-entity light="type:directional; intensity:0.7" position="1 2 1"></a-entity>
+
+      <!-- Kerucut -->
+      <!-- Skala dan orientasi dipilih agar pas di marker -->
+      <a-cone id="cone" position="0 0 0" rotation="-90 0 0" radius-bottom="0.8" radius-top="0.02" height="2.0" 
+              color="#FF7F50" material="opacity:0.95; transparent:true; metalness:0.2; roughness:0.8"></a-cone>
+
+      <!-- Bidang pemotong (semi-transparan) -->
+      <a-plane id="slicePlane" width="2.2" height="2.2" color="#40E0D0"
+               material="opacity:0.35; transparent:true; side:double"
+               position="0 0.2 0" rotation="0 0 0"></a-plane>
+
+      <!-- Group untuk kurva irisan -->
+      <a-entity id="curveGroup" position="0 0.2 0"></a-entity>
+
+      <!-- Sumbu bantu -->
+      <a-entity id="axes">
+        <a-cylinder position="0 0 0" height="2.6" radius="0.007" color="#ffffff"></a-cylinder>
+      </a-entity>
+    </a-marker>
+
+    <a-entity camera></a-entity>
+  </a-scene>
+
+  <script>
+    const $ = (sel) => document.querySelector(sel);
+    const toast = (msg, t=1200) => { const el = $('#toast'); el.textContent = msg; el.style.display = 'block'; setTimeout(()=> el.style.display='none', t); };
+
+    const marker = $('#marker');
+    const cone = $('#cone');
+    const plane = $('#slicePlane');
+    const curveGroup = $('#curveGroup');
+
+    // state
+    let current = 'circle'; // default
+
+    // UI hooks
+    const btns = {
+      circle: $('#btnCircle'),
+      ellipse: $('#btnEllipse'),
+      parabola: $('#btnParabola'),
+      hyperbola: $('#btnHyperbola'),
+    };
+
+    function setActive(name){
+      Object.entries(btns).forEach(([k,btn])=>{
+        if(!btn) return;
+        if(k===name) btn.classList.add('active'); else btn.classList.remove('active');
+      });
+    }
+
+    btns.circle.addEventListener('click', ()=>{ current='circle'; setActive('circle'); alignFor('circle'); drawCurve('circle'); toast('Irisan: Lingkaran'); });
+    btns.ellipse.addEventListener('click', ()=>{ current='ellipse'; setActive('ellipse'); alignFor('ellipse'); drawCurve('ellipse'); toast('Irisan: Elips'); });
+    btns.parabola.addEventListener('click', ()=>{ current='parabola'; setActive('parabola'); alignFor('parabola'); drawCurve('parabola'); toast('Irisan: Parabola'); });
+    btns.hyperbola.addEventListener('click', ()=>{ current='hyperbola'; setActive('hyperbola'); alignFor('hyperbola'); drawCurve('hyperbola'); toast('Irisan: Hiperbola'); });
+
+    $('#tilt').addEventListener('input', (e)=>{
+      const deg = +e.target.value;
+      plane.setAttribute('rotation', `${deg} 0 0`);
+      curveGroup.setAttribute('rotation', `${deg} 0 0`);
+      drawCurve(current);
+    });
+
+    // Helper: clear previous curve
+    function clearCurve(){
+      while (curveGroup.firstChild) curveGroup.removeChild(curveGroup.firstChild);
+    }
+
+    // Helper: create small point as sphere
+    function point(x, y, z){
+      const p = document.createElement('a-sphere');
+      p.setAttribute('radius', 0.012);
+      p.setAttribute('color', '#222');
+      p.setAttribute('position', `${x} ${y} ${z}`);
+      p.setAttribute('material', 'metalness:0.1; roughness:0.5');
+      return p;
+    }
+
+    // Draw parametric ring (for circle / ellipse) using many points
+    function drawRing(rx=0.6, rz=0.6){
+      const n = 140;
+      for (let i=0;i<n;i++){
+        const t = (i/n) * Math.PI*2;
+        const x = rx * Math.cos(t);
+        const z = rz * Math.sin(t);
+        curveGroup.appendChild(point(x, 0, z));
+      }
+    }
+
+    function drawParabola(a=0.7){
+      // y = a * x^2  (projected into x-z plane as curve on the slicing plane)
+      const range = 1.0; const step = 0.02;
+      for (let x=-range; x<=range; x+=step){
+        const z = a * x * x; // open along +z
+        if (Math.abs(z) <= 0.9) curveGroup.appendChild(point(x, 0, z));
+      }
+    }
+
+    function drawHyperbola(a=0.45, b=0.25){
+      // z^2/a^2 - x^2/b^2 = 1  => two branches along z
+      const zmin = Math.sqrt(1)*a + 0.0; // start just outside vertex
+      const zmax = 1.2;
+      const step = 0.01;
+      for (let z=zmin; z<=zmax; z+=step){
+        const x = Math.sqrt( (z*z)/(a*a) - 1 ) * b;
+        if (isFinite(x)){
+          curveGroup.appendChild(point(+x, 0, z));
+          curveGroup.appendChild(point(-x, 0, z));
+        }
+      }
+      // Mirror negative z branch
+      for (let z=-zmin; z>=-zmax; z-=step){
+        const x = Math.sqrt( (z*z)/(a*a) - 1 ) * b;
+        if (isFinite(x)){
+          curveGroup.appendChild(point(+x, 0, z));
+          curveGroup.appendChild(point(-x, 0, z));
+        }
+      }
+    }
+
+    function drawCurve(type){
+      clearCurve();
+      if (type==='circle'){
+        // bidang sejajar alas → lingkaran
+        drawRing(0.6, 0.6);
+      } else if (type==='ellipse'){
+        // bidang miring tapi tidak memotong kedua nappe → elips (skala tak sama)
+        drawRing(0.75, 0.45);
+      } else if (type==='parabola'){
+        drawParabola(0.6);
+      } else if (type==='hyperbola'){
+        drawHyperbola(0.5, 0.3);
+      }
+    }
+
+    function alignFor(type){
+      // Atur kemiringan bidang yang representatif untuk tiap jenis irisan
+      if (type==='circle'){
+        plane.setAttribute('rotation', `0 0 0`);
+        curveGroup.setAttribute('rotation', `0 0 0`);
+      }
+      if (type==='ellipse'){
+        plane.setAttribute('rotation', `25 0 0`);
+        curveGroup.setAttribute('rotation', `25 0 0`);
+      }
+      if (type==='parabola'){
+        plane.setAttribute('rotation', `45 0 0`);
+        curveGroup.setAttribute('rotation', `45 0 0`);
+      }
+      if (type==='hyperbola'){
+        plane.setAttribute('rotation', `65 0 0`);
+        curveGroup.setAttribute('rotation', `65 0 0`);
+      }
+      // Sinkronkan slider UI dengan sudut
+      const rx = plane.getAttribute('rotation').x|0;
+      const tilt = document.getElementById('tilt');
+      tilt.value = rx;
+    }
+
+    // init
+    setActive('circle');
+    alignFor('circle');
+    drawCurve('circle');
+
+    // marker feedback
+    marker.addEventListener('markerFound', ()=> toast('Marker terdeteksi'));
+    marker.addEventListener('markerLost', ()=> toast('Marker hilang'));
+  </script>
+</body>
+</html>
